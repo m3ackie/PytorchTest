@@ -1,204 +1,453 @@
-# coding: utf-8
+import cv2
+import numpy as np
+import matplotlib.pylab as plt
+import pydicom as dicom
+import os
+import glob
+
+import pandas as pd
+import scipy.ndimage
+
+# from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import torch
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
-import numpy as np
-import os
-from torch.autograd import Variable
 import torch.nn as nn
+from torch import optim
+from torch.autograd import Variable
+from torch.utils.data import DataLoader, Dataset
+# from tqdm import tqdm
 import torch.nn.functional as F
-import torch.optim as optim
-import sys
-sys.path.append("..")
-from utils.utils import MyDataset, validate, show_confMat
-from tensorboardX import SummaryWriter
-from datetime import datetime
+import torchvision.transforms as transforms
 
-train_txt_path = '../../Data/train.txt'
-valid_txt_path = '../../Data/valid.txt'
+import LABLE_MAEKER.makelable as ml
+import Capsule3D.modle as md
 
-classes_name = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-
-train_bs = 16
-valid_bs = 16
-lr_init = 0.001
-max_epoch = 1
-
-# log
-result_dir = '../../Result/'
-
-now_time = datetime.now()
-time_str = datetime.strftime(now_time, '%m-%d_%H-%M-%S')
-
-log_dir = os.path.join(result_dir, time_str)
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-writer = SummaryWriter(log_dir=log_dir)
-
-# ------------------------------------ step 1/5 : 加载数据------------------------------------
-
-# 数据预处理设置
-normMean = [0.4948052, 0.48568845, 0.44682974]
-normStd = [0.24580306, 0.24236229, 0.2603115]
-normTransform = transforms.Normalize(normMean, normStd)
-trainTransform = transforms.Compose([
-    transforms.Resize(32),
-    transforms.RandomCrop(32, padding=4),
-    transforms.ToTensor(),
-    normTransform
-])
-
-validTransform = transforms.Compose([
-    transforms.ToTensor(),
-    normTransform
-])
-
-# 构建MyDataset实例
-train_data = MyDataset(txt_path=train_txt_path, transform=trainTransform)
-valid_data = MyDataset(txt_path=valid_txt_path, transform=validTransform)
-
-# 构建DataLoder
-train_loader = DataLoader(dataset=train_data, batch_size=train_bs, shuffle=True)
-valid_loader = DataLoader(dataset=valid_data, batch_size=valid_bs)
-
-# ------------------------------------ step 2/5 : 定义网络------------------------------------
+BATCH_SIZE = 2
+learning_rate = 1e-5
+num_epoches = 10
+NUM_ROUTING_ITERATIONS = 3
 
 
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+class MyDataset(Dataset):
+    """
+    root: 图像根目录
+    augment:是否需要图像增强
+    """
 
-    def forward(self, x):
-        x = self.pool1(F.relu(self.conv1(x)))
-        x = self.pool2(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+    def __init__(self, mylable, augment=None):
 
-    # 定义权值初始化
-    def initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                torch.nn.init.xavier_normal_(m.weight.data)
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Linear):
-                torch.nn.init.normal_(m.weight.data, 0, 0.01)
-                m.bias.data.zero_()
+        self.lable = []
+        self.datapath = []
+        self.lymphpos = []
+        self.lymphlable = []
+
+        with open(mylable, 'r') as fopen:
+            for line in fopen:
+                line = line.strip('\n')
+                line = line.split('@')
+                datapath, lymphpos, lymphlable = line[0], line[1], line[2]
+                self.datapath.append(datapath)
+                # position
+                lymphpos = lymphpos.split('  ')
+                self.lymphpos.append(lymphpos)
+                # lable
+                lymphlable = lymphlable.strip(' ')
+                self.lymphlable.append(lymphlable)
+                # print(datapath, lablepath)
+        self.augment = augment
+
+    def __getitem__(self, index):
+        # slices is 3d d*512*512
+        itlable = np.asarray(int(self.lymphlable[index]))
+        itpos = np.asarray(self.lymphpos[index]).astype(np.float64)
+        self.lstFilesDCM = []
+        for dirName, subdirList, fileList in os.walk(self.datapath[index]):
+            for filename in fileList:
+                if ".dcm" in filename.lower():
+                    self.lstFilesDCM.append(os.path.join(dirName, filename))
+
+        self.lstFilesDCM = np.array(self.lstFilesDCM)
+
+        if self.augment:
+            slices = [dicom.read_file(s) for s in self.lstFilesDCM]
+            slices.sort(key=lambda x: int(x.ImagePositionPatient[2]))
+            slices = self.set_slice_thickness(slices)
+            firstslice = slices[0]
+            pixelposition = self.getpixelposition(firstslice, itpos)
+            # print(pixelposition)
+            if pixelposition[2] >= 15:
+                lymphslices = slices[pixelposition[2] - 15:pixelposition[2] + 15]
+                if len(slices) - pixelposition[2] < 15:
+                    lymphslices = slices[len(slices) - 30:len(slices)]
+            else:
+                lymphslices = slices[0:30]
+            # print(lymphslices)
+            slices = self.get_pixels_hu(lymphslices, pixelposition)
+            image = self.setDicomCenWid(slices, "abdomen")
+            image = self.normalize(image)
+            image = image[np.newaxis, :, :, :]
+            # print(image.shape)
+            # dataimage = self.resample(image, firstslice)
+        else:
+            slices = [dicom.read_file(s) for s in self.lstFilesDCM]
+            slices.sort(key=lambda x: int(x.ImagePositionPatient[2]))
+            image = np.array(slices, dtype=np.float32)
+        return torch.from_numpy(image), torch.from_numpy(itlable), itpos
+
+    def __len__(self):
+        # 返回图像的数量
+        return len(self.datapath)
+
+    def getpixelposition(self, firstslice, position):
+        x, y, z = firstslice.ImagePositionPatient[0], firstslice.ImagePositionPatient[1], \
+                  firstslice.ImagePositionPatient[2]
+        spacing = firstslice.PixelSpacing[0]
+        thickness = firstslice.SliceThickness
+        imageposition = [round((float(position[0]) - x) / spacing), round((float(position[1]) - y) / spacing),
+                         round((float(position[2]) - z) / thickness)]
+
+        return imageposition
+
+    def set_slice_thickness(self, slices):
+        try:
+            slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
+        except:
+            slice_thickness = np.abs(slices[0].SliceLocation - slices[1].SliceLocation)
+        for s in slices:
+            s.SliceThickness = slice_thickness
+            # print(s.SliceThickness)
+        return slices
+
+    def get_pixels_hu(self, slices, positioninslice):
+        image = np.stack([np.pad(s.pixel_array, ((15, 15), (15, 15)), 'linear_ramp')[
+                          positioninslice[0]:positioninslice[0] + 30,
+                          positioninslice[1]: positioninslice[1] + 30] for s in slices])
+        image = image.astype(np.int16)
+        image[image == -2000] = 0
+
+        for slice_number in range(len(slices)):
+            intercept = slices[slice_number].RescaleIntercept
+            slope = slices[slice_number].RescaleSlope
+            if slope != 1:
+                image[slice_number] = slope * image[slice_number].astype(np.float64)
+                image[slice_number] = image[slice_number].astype(np.int16)
+            image[slice_number] += np.int16(intercept)
+
+        return np.array(image, dtype=np.float32)
+
+    def get_window_size(self, organ_name):
+        if organ_name == 'lung':
+            # 肺部 ww 1500-2000 wl -450--600
+            center = -500
+            width = 2000
+        elif organ_name == 'abdomen':
+            # 腹部 ww 300-500 wl 30-50
+            center = 40
+            width = 500
+        elif organ_name == 'bone':
+            # 骨窗 ww 1000-1500 wl 250-350
+            center = 300
+            width = 2000
+        elif organ_name == 'lymph':
+            # 淋巴、软组织 ww 300-500 wl 40-60
+            center = 45
+            width = 10
+        elif organ_name == 'mediastinum':
+            # 纵隔 ww 250-350 wl 250-350
+            center = 40
+            width = 350
+
+        return center, width
+
+    def setDicomCenWid(self, slices, organ_name):
+        img = slices
+        center, width = self.get_window_size(organ_name)
+        min = (2 * center - width) / 2.0 + 0.5
+        max = (2 * center + width) / 2.0 + 0.5
+
+        dFactor = 255.0 / (max - min)
+        d, h, w = np.shape(img)
+        for n in np.arange(d):
+            for i in np.arange(h):
+                for j in np.arange(w):
+                    img[n, i, j] = int((img[n, i, j] - min) * dFactor)
+
+        min_index = img < 0
+        img[min_index] = 0
+        max_index = img > 255
+        img[max_index] = 255
+
+        return img
+
+    def normalize(self, slices):
+        _range = np.max(slices) - np.min(slices)
+        return (slices - np.min(slices)) / _range
+
+    def resample(self, image, slice, new_spacing=[1, 1, 1]):
+        spacing = map(float, ([slice.SliceThickness] + [slice.PixelSpacing[0], slice.PixelSpacing[1]]))
+        spacing = np.array(list(spacing))
+        resize_factor = spacing / new_spacing
+        new_real_shape = image.shape * resize_factor
+        new_shape = np.round(new_real_shape)
+        real_resize_factor = new_shape / image.shape
+        new_spacing = spacing / real_resize_factor
+        image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
+
+        return image, new_spacing
 
 
-net = Net()     # 创建一个网络
-net.initialize_weights()    # 初始化权值
+def train(model, train_loader, test_loader, args):
+    """
+    Training a CapsuleNet
+    :param model: the CapsuleNet model
+    :param train_loader: torch.utils.data.DataLoader for training data
+    :param test_loader: torch.utils.data.DataLoader for test data
+    :param args: arguments
+    :return: The trained model
+    """
+    print('Begin Training' + '-' * 70)
+    from time import time
+    import csv
+    logfile = open(args.save_dir + '/log.csv', 'w')
+    logwriter = csv.DictWriter(logfile, fieldnames=['epoch', 'loss', 'val_loss', 'val_acc'])
+    logwriter.writeheader()
 
-# ------------------------------------ step 3/5 : 定义损失函数和优化器 ------------------------------------
+    t0 = time()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = md.CapsuleLoss()
+    lr_decay = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay)
+    best_val_acc = 0.
+    for epoch in range(args.epochs):
+        print('*' * 25, 'epoch{}'.format(epoch + 1), '*' * 25)
+        model.train()  # set to training mode
 
-criterion = nn.CrossEntropyLoss()                                                   # 选择损失函数
-optimizer = optim.SGD(net.parameters(), lr=lr_init, momentum=0.9, dampening=0.1)    # 选择优化器
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.1)     # 设置学习率下降策略
+        ti = time()
+        training_loss = 0.0
+        for i, data in enumerate(train_loader, start=1):
+            image, label, pos = data[0], data[1], data[2]
+            # print(image)
+            # label = label.long()
+            label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
+            print(label)
+            if use_gpu:
+                image = Variable(image).cuda()
+                label = Variable(label).cuda()
+            else:
+                image = Variable(image)
+                label = Variable(label)
+            optimizer.zero_grad()  # set gradients of optimizer to zero
+            classes, reconstructions = model(image, label)  # forward
+            # print(classes, reconstructions.shape)
+            loss = criterion(image, label, classes, reconstructions)  # compute loss
+            print(loss.data.item())
+            loss.backward()  # backward, compute all gradients of loss w.r.t all Variables
+            training_loss += loss.data.item() * image.size(0)  # record the batch loss
+            optimizer.step()  # update the trainable parameters with computed gradients
+        lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
+        # compute validation loss and acc
+        val_loss, val_acc = test(model, test_loader, args)
+        logwriter.writerow(dict(epoch=epoch, loss=training_loss / len(train_loader.dataset),
+                                val_loss=val_loss, val_acc=val_acc))
+        print("==> Epoch %02d: loss=%.5f, val_loss=%.5f, val_acc=%.4f, time=%ds"
+              % (epoch, training_loss / len(train_loader.dataset),
+                 val_loss, val_acc, time() - ti))
+        if val_acc > best_val_acc:  # update best validation acc and save model
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), args.save_dir + '/epoch%d.pkl' % epoch)
+            print("best val_acc increased to %.4f" % best_val_acc)
+    logfile.close()
+    torch.save(model.state_dict(), args.save_dir + '/trained_model.pkl')
+    print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
+    print("Total time = %ds" % (time() - t0))
+    print('End Training' + '-' * 70)
+    return model
 
-# ------------------------------------ step 4/5 : 训练 --------------------------------------------------
 
-for epoch in range(max_epoch):
+def test(model, test_loader, args):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    criterion = md.CapsuleLoss()
+    for i, data in enumerate(train_loader, start=1):
+        image, label, pos = data[0], data[1], data[2]
+        # label = label.long()
+        label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
+        if use_gpu:
+            image = Variable(image).cuda()
+            label = Variable(label).cuda()
+        else:
+            image = Variable(image)
+            label = Variable(label)
 
-    loss_sigma = 0.0    # 记录一个epoch的loss之和
-    correct = 0.0
-    total = 0.0
-    scheduler.step()  # 更新学习率
+        y_pred, x_recon = model(image)
+        test_loss += criterion(image, label, y_pred, x_recon).data.item() * image.size(0)  # sum up batch loss
+        y_pred = y_pred.data.max(1)[1]
+        y_true = label.data.max(1)[1]
+        correct += y_pred.eq(y_true).cpu().sum()
 
-    for i, data in enumerate(train_loader):
-        # if i == 30 : break
-        # 获取图片和标签
-        inputs, labels = data
-        inputs, labels = Variable(inputs), Variable(labels)
+    test_loss /= len(test_loader.dataset)
+    return test_loss, correct / len(test_loader.dataset)
 
-        # forward, backward, update weights
-        optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
 
-        # 统计预测信息
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).squeeze().sum().numpy()
-        loss_sigma += loss.item()
+def load_dataset(path='../lymph_dataset/mylable.txt', download=False, batch_size=2, shift_pixels=2):
+    """
+    Construct dataloaders for training and test data. Data augmentation is also done here.
+    :param path: file path of the dataset
+    :param download: whether to download the original data
+    :param batch_size: batch size
+    :param shift_pixels: maximum number of pixels to shift in each direction
+    :return: train_loader, test_loader
+    """
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
+    if os.path.exists(trainpath):
+        os.remove(trainpath)
+    if os.path.exists(testpath):
+        os.remove(testpath)
+    ml.make_traintest_lable(path, trainpath, testpath)
+    traindata = MyDataset(trainpath, augment=True)
+    testdata = MyDataset(testpath, augment=True)
+    train_loader = DataLoader(traindata, batch_size=args.batch_size, num_workers=0)
+    test_loader = DataLoader(testdata, batch_size=args.batch_size, num_workers=0)
 
-        # 每10个iteration 打印一次训练信息，loss为10个iteration的平均
-        if i % 10 == 9:
-            loss_avg = loss_sigma / 10
-            loss_sigma = 0.0
-            print("Training: Epoch[{:0>3}/{:0>3}] Iteration[{:0>3}/{:0>3}] Loss: {:.4f} Acc:{:.2%}".format(
-                epoch + 1, max_epoch, i + 1, len(train_loader), loss_avg, correct / total))
+    return train_loader, test_loader
 
-            # 记录训练loss
-            writer.add_scalars('Loss_group', {'train_loss': loss_avg}, epoch)
-            # 记录learning rate
-            writer.add_scalar('learning rate', scheduler.get_lr()[0], epoch)
-            # 记录Accuracy
-            writer.add_scalars('Accuracy_group', {'train_acc': correct / total}, epoch)
 
-    # 每个epoch，记录梯度，权值
-    for name, layer in net.named_parameters():
-        writer.add_histogram(name + '_grad', layer.grad.cpu().data.numpy(), epoch)
-        writer.add_histogram(name + '_data', layer.cpu().data.numpy(), epoch)
+# def show_reconstruction(model, test_loader, n_images, args):
+#     import matplotlib.pyplot as plt
+#     from utils import combine_images
+#     from PIL import Image
+#     import numpy as np
+#
+#     model.eval()
+#     for x, _ in test_loader:
+#         x = Variable(x[:min(n_images, x.size(0))].cuda(), volatile=True)
+#         _, x_recon = model(x)
+#         data = np.concatenate([x.data, x_recon.data])
+#         img = combine_images(np.transpose(data, [0, 2, 3, 1]))
+#         image = img * 255
+#         Image.fromarray(image.astype(np.uint8)).save(args.save_dir + "/real_and_recon.png")
+#         print()
+#         print('Reconstructed images are saved to %s/real_and_recon.png' % args.save_dir)
+#         print('-' * 70)
+#         plt.imshow(plt.imread(args.save_dir + "/real_and_recon.png", ))
+#         plt.show()
+#         break
 
-    # ------------------------------------ 观察模型在验证集上的表现 ------------------------------------
-    if epoch % 2 == 0:
-        loss_sigma = 0.0
-        cls_num = len(classes_name)
-        conf_mat = np.zeros([cls_num, cls_num])  # 混淆矩阵
-        net.eval()
-        for i, data in enumerate(valid_loader):
 
-            # 获取图片和标签
-            images, labels = data
-            images, labels = Variable(images), Variable(labels)
+if __name__ == "__main__":
+    import argparse
 
-            # forward
-            outputs = net(images)
-            outputs.detach_()
+    print('start')
+    dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
+    lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
+    candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
+    datalabletxt = r'../lymph_dataset/lable.txt'
+    mylable = r'../lymph_dataset/mylable.txt'
+    print(mylable)
 
-            # 计算loss
-            loss = criterion(outputs, labels)
-            loss_sigma += loss.item()
+    patientDirlist = os.listdir(dataPath)
+    lableDirlist = os.listdir(lablePath)
+    candidateDirlist = os.listdir(candidatePath)
+    # print(patientDirlist)
+    # 获取指定病人DICOM数据集
+    allPPathList = [dataPath + "/" + patientNum for patientNum in patientDirlist]
+    candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
+    ml.maketxtfile(allPPathList, candidatePathlist)
+    print("successfully maketxt")
+    ml.makelable(datalabletxt, mylable)
+    print("successfully mylable")
 
-            # 统计
-            _, predicted = torch.max(outputs.data, 1)
-            # labels = labels.data    # Variable --> tensor
+    # setting the hyper parameters
+    parser = argparse.ArgumentParser(description="3D capsule networck on lymph dataset")
+    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--batch_size', default=4, type=int)
+    parser.add_argument('--lr', default=0.001, type=float,
+                        help="Initial learning rate")
+    parser.add_argument('--lr_decay', default=0.9, type=float,
+                        help="The value multiplied by lr at each epoch. Set a larger value for larger epochs")
+    parser.add_argument('--lam_recon', default=0.0005 * 784, type=float,
+                        help="The coefficient for the loss of decoder")
+    parser.add_argument('-r', '--routings', default=3, type=int,
+                        help="Number of iterations used in routing algorithm. should > 0")  # num_routing should > 0
+    parser.add_argument('--shift_pixels', default=2, type=int,
+                        help="Number of pixels to shift at most in each direction.")
+    parser.add_argument('--data_dir', default=mylable,
+                        help="Directory of data. If no data, use \'--download\' flag to download it")
+    parser.add_argument('--download', action='store_true',
+                        help="Download the required data.")
+    parser.add_argument('--save_dir', default='./result')
+    parser.add_argument('-t', '--testing', action='store_true',
+                        help="Test the trained model on testing dataset")
+    parser.add_argument('-w', '--weights', default=None,
+                        help="The path of the saved weights. Should be specified when testing")
+    args = parser.parse_args()
+    print(args)
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
 
-            # 统计混淆矩阵
-            for j in range(len(labels)):
-                cate_i = labels[j].numpy()
-                pre_i = predicted[j].numpy()
-                conf_mat[cate_i, pre_i] += 1.0
+    # load data
+    train_loader, test_loader = load_dataset(args.data_dir, download=False, batch_size=args.batch_size)
 
-        print('{} set Accuracy:{:.2%}'.format('Valid', conf_mat.trace() / conf_mat.sum()))
-        # 记录Loss, accuracy
-        writer.add_scalars('Loss_group', {'valid_loss': loss_sigma / len(valid_loader)}, epoch)
-        writer.add_scalars('Accuracy_group', {'valid_acc': conf_mat.trace() / conf_mat.sum()}, epoch)
-print('Finished Training')
+    model = md.CapsuleNet_3D()
+    use_gpu = torch.cuda.is_available()
 
-# ------------------------------------ step5: 保存模型 并且绘制混淆矩阵图 ------------------------------------
-net_save_path = os.path.join(log_dir, 'net_params.pkl')
-torch.save(net.state_dict(), net_save_path)
+    if use_gpu:
+        model = model.cuda()
 
-conf_mat_train, train_acc = validate(net, train_loader, 'train', classes_name)
-conf_mat_valid, valid_acc = validate(net, valid_loader, 'valid', classes_name)
+    if args.weights is not None:  # init the model weights with provided one
+        model.load_state_dict(torch.load(args.weights))
 
-show_confMat(conf_mat_train, classes_name, 'train', log_dir)
-show_confMat(conf_mat_valid, classes_name, 'valid', log_dir)
+    if not args.testing:
+        train(model, train_loader, test_loader, args)
+    else:  # testing
+        if args.weights is None:
+            print('No weights are provided. Will test using random initialized weights.')
+        test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
+        print('test acc = %.4f, test loss = %.5f' % (test_acc, test_loss))
+
+        # show_reconstruction(model, test_loader, 50, args)
+    # criterion = md.CapsuleLoss()
+    # optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+    #
+    # for epoch in range(num_epoches):
+    #     print('*' * 25, 'epoch{}'.format(epoch + 1), '*' * 25)
+    #     running_loss = 0.0
+    #     running_acc = 0.0
+    #     for i, data in enumerate(train_loader, start=1):
+    #         image, label, pos = data[0], data[1], data[2]
+    #         # label = label.long()
+    #         label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
+    #         if use_gpu:
+    #             image = Variable(image).cuda()
+    #             label = Variable(label).cuda()
+    #         else:
+    #             image = Variable(image)
+    #             label = Variable(label)
+    #         # 向前传播
+    #         if i < int(datacount / BATCH_SIZE * 0.9):
+    #             print(i)
+    #             classes, reconstructions = model(image, label)
+    #         else:
+    #             print(i)
+    #             classes, reconstructions = model(image)
+    #             loss = criterion(image, label, classes, reconstructions)
+    #             print('LOSS : %.4f   Accuracy: %.4f  ' % (loss, classes))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

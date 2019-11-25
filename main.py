@@ -24,7 +24,7 @@ import Capsule3D.modle as md
 
 BATCH_SIZE = 2
 learning_rate = 1e-5
-num_epoches = 10
+num_epoches = 20
 NUM_ROUTING_ITERATIONS = 3
 
 
@@ -84,7 +84,7 @@ class MyDataset(Dataset):
             # print(lymphslices)
             slices = self.get_pixels_hu(lymphslices, pixelposition)
             image = self.setDicomCenWid(slices, "abdomen")
-            image = self.normalize(image)
+            # image = self.normalize(image)
             image = image[np.newaxis, :, :, :]
             # print(image.shape)
             # dataimage = self.resample(image, firstslice)
@@ -92,6 +92,7 @@ class MyDataset(Dataset):
             slices = [dicom.read_file(s) for s in self.lstFilesDCM]
             slices.sort(key=lambda x: int(x.ImagePositionPatient[2]))
             image = np.array(slices, dtype=np.float32)
+
         return torch.from_numpy(image), torch.from_numpy(itlable), itpos
 
     def __len__(self):
@@ -208,10 +209,14 @@ def train(model, train_loader, test_loader, args):
     print('Begin Training' + '-' * 70)
     from time import time
     import csv
-    logfile = open(args.save_dir + '/log.csv', 'w')
+    logfile = open(args.save_dir + '/log.csv', 'a')
     logwriter = csv.DictWriter(logfile, fieldnames=['epoch', 'loss', 'val_loss', 'val_acc'])
     logwriter.writeheader()
 
+    print("Model's state_dict:")
+    # Print model's state_dict
+    for param_tensor in model.state_dict():
+        print(param_tensor, "\t", model.state_dict()[param_tensor].size())
     t0 = time()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = md.CapsuleLoss()
@@ -225,24 +230,27 @@ def train(model, train_loader, test_loader, args):
         training_loss = 0.0
         for i, data in enumerate(train_loader, start=1):
             image, label, pos = data[0], data[1], data[2]
-            # print(image)
-            # label = label.long()
-            label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
-            print(label)
-            if use_gpu:
-                image = Variable(image).cuda()
-                label = Variable(label).cuda()
+            if pd.isna(image).any():
+                continue
             else:
-                image = Variable(image)
-                label = Variable(label)
-            optimizer.zero_grad()  # set gradients of optimizer to zero
-            classes, reconstructions = model(image, label)  # forward
-            # print(classes, reconstructions.shape)
-            loss = criterion(image, label, classes, reconstructions)  # compute loss
-            print(loss.data.item())
-            loss.backward()  # backward, compute all gradients of loss w.r.t all Variables
-            training_loss += loss.data.item() * image.size(0)  # record the batch loss
-            optimizer.step()  # update the trainable parameters with computed gradients
+                # print(image)
+                # label = label.long()
+                label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
+                # print(label)
+                if use_gpu:
+                    image = Variable(image).cuda()
+                    label = Variable(label).cuda()
+                else:
+                    image = Variable(image)
+                    label = Variable(label)
+                optimizer.zero_grad()  # set gradients of optimizer to zero
+                classes = model(image, label)  # forward
+                # print(classes, reconstructions.shape)
+                loss = criterion(image, label, classes)  # compute loss
+                print(loss.data.item())
+                loss.backward()  # backward, compute all gradients of loss w.r.t all Variables
+                training_loss += loss.data.item() * image.size(0)  # record the batch loss
+                optimizer.step()  # update the trainable parameters with computed gradients
         lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
         # compute validation loss and acc
         val_loss, val_acc = test(model, test_loader, args)
@@ -256,7 +264,7 @@ def train(model, train_loader, test_loader, args):
             torch.save(model.state_dict(), args.save_dir + '/epoch%d.pkl' % epoch)
             print("best val_acc increased to %.4f" % best_val_acc)
     logfile.close()
-    torch.save(model.state_dict(), args.save_dir + '/trained_model.pkl')
+    torch.save(model.state_dict(), args.save_dir + '/trained_model_3.pkl')
     print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
     print("Total time = %ds" % (time() - t0))
     print('End Training' + '-' * 70)
@@ -268,7 +276,7 @@ def test(model, test_loader, args):
     test_loss = 0
     correct = 0
     criterion = md.CapsuleLoss()
-    for i, data in enumerate(train_loader, start=1):
+    for i, data in enumerate(test_loader, start=1):
         image, label, pos = data[0], data[1], data[2]
         # label = label.long()
         label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
@@ -279,13 +287,15 @@ def test(model, test_loader, args):
             image = Variable(image)
             label = Variable(label)
 
-        y_pred, x_recon = model(image)
-        test_loss += criterion(image, label, y_pred, x_recon).data.item() * image.size(0)  # sum up batch loss
+        y_pred = model(image)
+        test_loss += criterion(image, label, y_pred).data.item() * image.size(0)  # sum up batch loss
         y_pred = y_pred.data.max(1)[1]
         y_true = label.data.max(1)[1]
+        print(y_pred, y_true)
         correct += y_pred.eq(y_true).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
+    print(correct, len(test_loader.dataset))
     return test_loss, correct / len(test_loader.dataset)
 
 
@@ -360,7 +370,7 @@ if __name__ == "__main__":
 
     # setting the hyper parameters
     parser = argparse.ArgumentParser(description="3D capsule networck on lymph dataset")
-    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--batch_size', default=4, type=int)
     parser.add_argument('--lr', default=0.001, type=float,
                         help="Initial learning rate")
@@ -405,49 +415,3 @@ if __name__ == "__main__":
             print('No weights are provided. Will test using random initialized weights.')
         test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
         print('test acc = %.4f, test loss = %.5f' % (test_acc, test_loss))
-
-        # show_reconstruction(model, test_loader, 50, args)
-    # criterion = md.CapsuleLoss()
-    # optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-    #
-    # for epoch in range(num_epoches):
-    #     print('*' * 25, 'epoch{}'.format(epoch + 1), '*' * 25)
-    #     running_loss = 0.0
-    #     running_acc = 0.0
-    #     for i, data in enumerate(train_loader, start=1):
-    #         image, label, pos = data[0], data[1], data[2]
-    #         # label = label.long()
-    #         label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
-    #         if use_gpu:
-    #             image = Variable(image).cuda()
-    #             label = Variable(label).cuda()
-    #         else:
-    #             image = Variable(image)
-    #             label = Variable(label)
-    #         # 向前传播
-    #         if i < int(datacount / BATCH_SIZE * 0.9):
-    #             print(i)
-    #             classes, reconstructions = model(image, label)
-    #         else:
-    #             print(i)
-    #             classes, reconstructions = model(image)
-    #             loss = criterion(image, label, classes, reconstructions)
-    #             print('LOSS : %.4f   Accuracy: %.4f  ' % (loss, classes))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

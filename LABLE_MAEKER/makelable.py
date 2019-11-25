@@ -8,15 +8,14 @@ import glob
 import pandas as pd
 import scipy.ndimage
 
-from skimage import measure, morphology
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+# from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+# from tqdm import tqdm
 import torch.nn.functional as F
 import torchvision.models as models
 
@@ -29,18 +28,21 @@ def maketxtfile(imagepath, lablepath):
     #         if ".txt" in filename.lower():
     #             lstFilesLAB.append(os.path.join(dirName, filename))
     # print(len(lablepath), len(imagepath))
-    if os.path.exists('F:\lymph_dataset\lable.txt'):
-        os.remove('F:\lymph_dataset\lable.txt')
-    if os.path.exists('F:\lymph_dataset\mylable.txt'):
-        os.remove('F:\lymph_dataset\mylable.txt')
-
+    if os.path.exists('../lymph_dataset/lable.txt'):
+        os.remove('../lymph_dataset/lable.txt')
+    if os.path.exists('../lymph_dataset/mylable.txt'):
+        os.remove('../lymph_dataset/mylable.txt')
     for i in np.arange(len(imagepath)):
         row = imagepath[i] + '  ' + lablepath[i] + '\n'
-        with open('F:\lymph_dataset\lable.txt', 'a') as f:
+        with open('../lymph_dataset/lable.txt', 'a') as f:
             f.write(row)
 
 
 def make_traintest_lable(totallable, trainpath, testpath):
+    if os.path.exists(trainpath):
+        os.remove(trainpath)
+    if os.path.exists(testpath):
+        os.remove(testpath)
     datacount = len(open(totallable, 'rU').readlines())
     i = 0
     with open(totallable, 'r') as fopen:
@@ -51,15 +53,15 @@ def make_traintest_lable(totallable, trainpath, testpath):
             else:
                 with open(testpath, 'a') as teopen:
                     teopen.write(line)
-            i = i+1
+            i = i + 1
+    print(datacount)
 
 
 def makelable(txt, mylable):
-
     lstFilesDCM = []
     lablefile = []
     dcm_txt = []
-
+    m = 0
     with open(txt, 'r') as fopen:
         for line in fopen:
             line = line.strip('\n')
@@ -69,6 +71,7 @@ def makelable(txt, mylable):
             allLymphPos = []
             allLymphSize = []
             newlable = []
+            i = 0
 
             for dirName, subdirList, fileList in os.walk(lablepath):
                 for filename in fileList:
@@ -81,7 +84,11 @@ def makelable(txt, mylable):
                                 line_ = line_.split(' ')
                                 sagittal, coronal, axial = line_[0], line_[1], line_[2]
                                 anegLymphPos = [sagittal, coronal, axial, lable]
-                                allLymphPos.append(anegLymphPos)
+                                if i % 3 == 0:
+                                    allLymphPos.append(anegLymphPos)
+                                    m += 1
+                                i += 1
+
                     if "posCADe_physicalPoints.txt" in filename:
                         lable = "1"
                         lablefile.append(os.path.join(dirName, filename))
@@ -120,7 +127,6 @@ def makelable(txt, mylable):
                                 mfopen.write(i + '  ')
                         mfopen.write('\n')
 
-
             # for dirName, subdirList, fileList in os.walk(datapath):
             #     for filename in fileList:
             #         if ".dcm" in filename.lower():
@@ -133,30 +139,26 @@ def makelable(txt, mylable):
             #                     if filename.find(newlable[_][2]) != -1:
             #                         is_exist = is_exist + 1
             #                 mfopen.write(str(is_exist) + '@' + '\n')
-
-                # print(filename)
+        print(m)
+        # print(filename)
     # print(lstFilesDCM)
 
 
 if __name__ == "__main__":
-
-    dataPath = r"F:\lymph_dataset\CT Lymph Nodes"
-    lablePath = r"F:\lymph_dataset\MED_ABD_LYMPH_ANNOTATIONS"
-    candidatePath = r"F:\lymph_dataset\MED_ABD_LYMPH_CANDIDATES"
-    datalabletxt = 'F:\lymph_dataset\lable.txt'
-    mylable = 'F:\lymph_dataset\mylable.txt'
-    trainpath = r'F:\lymph_dataset\trainpath.txt'
-    testpath = r'F:\lymph_dataset\testpath.txt'
+    dataPath = r"../lymph_dataset/CT Lymph Nodes"
+    lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
+    candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
+    datalabletxt = '../lymph_dataset/lable.txt'
+    mylable = '../lymph_dataset/mylable.txt'
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
 
     patientDirlist = os.listdir(dataPath)
     lableDirlist = os.listdir(lablePath)
     candidateDirlist = os.listdir(candidatePath)
     # print(patientDirlist)
     # 获取指定病人DICOM数据集
-    allPPathList = [dataPath + "\\" + patientNum for patientNum in patientDirlist]
-    candidatePathlist = [candidatePath + "\\" + lableNum for lableNum in candidateDirlist]
+    allPPathList = [dataPath + "/" + patientNum for patientNum in patientDirlist]
+    candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
     maketxtfile(allPPathList, candidatePathlist)
     makelable(datalabletxt, mylable)
-    make_traintest_lable(mylable, trainpath, testpath)
-
-

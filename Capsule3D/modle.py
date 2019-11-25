@@ -68,9 +68,7 @@ class CapsuleLayer(nn.Module):
                 0.01 * torch.randn(num_capsules, num_route_nodes, in_channels, out_channels))
         else:
             # conv to capsule
-            self.capsules = nn.ModuleList(
-                [nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=0) for _ in
-                 range(num_capsules)])
+            self.capsules = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=0)
 
     def squash(self, tensor, dim=-1):
         # 张量的范数||Sj||
@@ -101,13 +99,11 @@ class CapsuleLayer(nn.Module):
                     logits = logits + delta_logits
         else:
             # 循环生成列表（长度为一个胶囊的维度，即num_capsules）capsule(x) eg: batchsize*outchannels*D*H*W 2*32*(10*10*10)*1
-            outputs = [capsule(x).view(x.size(0), -1, 1) for capsule in self.capsules]
-            # cat把output合并(reshape)为一个胶囊  outputs 2*32*(10*10*10)*8D(num_capsule)
-            outputs = torch.cat(outputs, dim=-1)
+            outputs = self.capsules(x).view(x.size(0), -1, self.num_capsules)
             # 挤压squash操作
             outputs = self.squash(outputs)
             # print('8d capsule')
-            # print(outputs)
+            print(outputs.shape)
         # print(self.num_route_nodes, outputs.shape)
 
         return outputs
@@ -120,17 +116,15 @@ class CapsuleNet_3D(nn.Module):
             # 1 low features conv layer
             nn.Conv3d(in_channels=1, out_channels=128, kernel_size=3, stride=1),
             # 2 primary capsule layer[1](feature to capsule)
-            CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=128, out_channels=16, kernel_size=9, stride=2),
+            CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=128, out_channels=128, kernel_size=9, stride=2),
             # 3 classification capsule layer(capsule to capsule)
             CapsuleLayer(num_capsules=NUM_CLASSES, num_route_nodes=16 * 10 * 10 * 10, in_channels=8, out_channels=16)
         )
         # 4 full conv decoder
         self.decoder = nn.Sequential(
-            nn.Linear(16 * NUM_CLASSES, 512),
+            nn.Linear(16 * NUM_CLASSES, 1024),
             nn.ReLU(inplace=True),
-            nn.Linear(512, 2048),
-            nn.ReLU(inplace=True),
-            nn.Linear(2048, 10240),
+            nn.Linear(1024, 10240),
             nn.ReLU(inplace=True),
             nn.Linear(10240, 27000),
             nn.Sigmoid()
@@ -142,11 +136,8 @@ class CapsuleNet_3D(nn.Module):
         x = self.features[1](x)
         # print(x.shape)
         x = self.features[2](x).squeeze()
-        print('xxxxxxxxxxxxxx')
-        print(x.shape)
         # capsule length & classes is y_pre
         classes = x.norm(dim=-1)  # (x ** 2).sum(dim=-1) ** 0.5
-        print(classes)
         # classes = F.softmax(classes, dim=-1)
 
         if y is None:
@@ -155,9 +146,9 @@ class CapsuleNet_3D(nn.Module):
             # y = Variable(torch.eye(NUM_CLASSES)).cuda().index_select(dim=0, index=max_length_indices.data)
             y = Variable(torch.zeros(classes.size()).scatter_(1, max_length_indices.view(-1, 1).cpu().data, 1.).cuda())
 
-        reconstructions = self.decoder((x * y[:, :, None]).view(x.size(0), -1))
+        # reconstructions = self.decoder((x * y[:, :, None]).view(x.size(0), -1))
 
-        return classes, reconstructions
+        return classes
 
 
 class CapsuleLoss(nn.Module):
@@ -165,18 +156,19 @@ class CapsuleLoss(nn.Module):
         super(CapsuleLoss, self).__init__()
         self.reconstruction_loss = nn.MSELoss(size_average=True)
 
-    def forward(self, images, labels, classes, reconstructions):
+    def forward(self, images, labels, classes):
+        print(labels, classes)
         margin_loss = labels * torch.clamp(0.9 - classes, min=0.) ** 2 + \
-                      0.5 * (1 - labels) * torch.clamp(classes - 0.1, min=0.) ** 2
+                      (1 - labels) * torch.clamp(classes - 0.1, min=0.) ** 2
         margin_loss = margin_loss.sum(dim=1).mean()
 
-        assert torch.numel(images) == torch.numel(reconstructions)
-        images = images.view(reconstructions.size()[0], -1)
-        reconstruction_loss = self.reconstruction_loss(reconstructions, images)
+        # #assert torch.numel(images) == torch.numel(reconstructions)
+        # images = images.view(reconstructions.size()[0], -1)
+        # reconstruction_loss = self.reconstruction_loss(reconstructions, images)
         print(margin_loss)
-        print(reconstruction_loss)
+        # print(reconstruction_loss)
 
-        return margin_loss + 0.0005 * reconstruction_loss * 27000
+        return margin_loss
 
 # if __name__ == "__main__":
 #     test = CapsuleLayer(num_capsules=8, num_route_nodes=-1, in_channels=128, out_channels=32, kernel_size=9, stride=2)

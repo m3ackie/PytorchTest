@@ -20,44 +20,60 @@ import torch.nn.functional as F
 import torchvision.models as models
 
 
-def maketxtfile(imagepath, lablepath):
-    lstFilesDCM = []
-    lstFilesLAB = []
-    # for dirName, subdirList, fileList in os.walk(lablepath):
-    #     for filename in fileList:
-    #         if ".txt" in filename.lower():
-    #             lstFilesLAB.append(os.path.join(dirName, filename))
-    # print(len(lablepath), len(imagepath))
-    if os.path.exists('../lymph_dataset/lable.txt'):
-        os.remove('../lymph_dataset/lable.txt')
+def maketxtfile(imagepath, labelpath):
+    if os.path.exists('../lymph_dataset/label.txt'):
+        os.remove('../lymph_dataset/label.txt')
     if os.path.exists('../lymph_dataset/mylable.txt'):
         os.remove('../lymph_dataset/mylable.txt')
+    if os.path.exists('../lymph_dataset/myABDneglabel.txt'):
+        os.remove('../lymph_dataset/myABDneglabel.txt')
+    if os.path.exists('../lymph_dataset/myABDposlabel.txt'):
+        os.remove('../lymph_dataset/myABDposlabel.txt')
+    if os.path.exists('../lymph_dataset/myMEDneglabel.txt'):
+        os.remove('../lymph_dataset/myMEDneglabel.txt')
+    if os.path.exists('../lymph_dataset/myMEDposlabel.txt'):
+        os.remove('../lymph_dataset/myMEDposlabel.txt')
+    if os.path.exists('../lymph_dataset/trainpath.txt'):
+        os.remove('../lymph_dataset/trainpath.txt')
+    if os.path.exists('../lymph_dataset/testpath.txt'):
+        os.remove('../lymph_dataset/testpath.txt')
     for i in np.arange(len(imagepath)):
-        row = imagepath[i] + '  ' + lablepath[i] + '\n'
-        with open('../lymph_dataset/lable.txt', 'a') as f:
+        row = imagepath[i] + '  ' + labelpath[i] + '\n'
+        with open('../lymph_dataset/label.txt', 'a') as f:
             f.write(row)
 
 
-def make_traintest_lable(totallable, trainpath, testpath):
+def make_traintest_label(neglabel, poslabel, trainpath, testpath):
     if os.path.exists(trainpath):
         os.remove(trainpath)
     if os.path.exists(testpath):
         os.remove(testpath)
-    datacount = len(open(totallable, 'rU').readlines())
+    negcount = len(open(neglabel, 'rU').readlines())
+    poscount = len(open(poslabel, 'rU').readlines())
     i = 0
-    with open(totallable, 'r') as fopen:
+    j = 0
+    with open(neglabel, 'r') as fopen:
         for line in fopen:
-            if i < int(datacount * 0.8):
+            if i % 9 > 0:
                 with open(trainpath, 'a') as topen:
                     topen.write(line)
             else:
                 with open(testpath, 'a') as teopen:
                     teopen.write(line)
             i = i + 1
-    print(datacount)
+    with open(poslabel, 'r') as fopen:
+        for line in fopen:
+            if j % 9 > 0:
+                with open(trainpath, 'a') as topen:
+                    topen.write(line)
+            else:
+                with open(testpath, 'a') as teopen:
+                    teopen.write(line)
+            j = j + 1
+    print(negcount, poscount)
 
 
-def makelable(txt, mylable):
+def makelabel(txt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel):
     lstFilesDCM = []
     lablefile = []
     dcm_txt = []
@@ -67,12 +83,18 @@ def makelable(txt, mylable):
             line = line.strip('\n')
             line = line.split('  ')
             datapath, lablepath = line[0], line[1]
-            # print(datapath, lablepath)
-            allLymphPos = []
+            if "ABD" in datapath:
+                myneglabel = myABDneglabel
+                myposlabel = myABDposlabel
+            elif "MED" in datapath:
+                myneglabel = myMEDneglabel
+                myposlabel = myMEDposlabel
+                # print(datapath, lablepath)
+            allnegLymphPos = []
+            allposLymphPos = []
             allLymphSize = []
             newlable = []
             i = 0
-
             for dirName, subdirList, fileList in os.walk(lablepath):
                 for filename in fileList:
                     if "negCADe_physicalPoints.txt" in filename:
@@ -84,8 +106,8 @@ def makelable(txt, mylable):
                                 line_ = line_.split(' ')
                                 sagittal, coronal, axial = line_[0], line_[1], line_[2]
                                 anegLymphPos = [sagittal, coronal, axial, lable]
-                                if i % 3 == 0:
-                                    allLymphPos.append(anegLymphPos)
+                                if i % 4 == 0:
+                                    allnegLymphPos.append(anegLymphPos)
                                     m += 1
                                 i += 1
 
@@ -98,7 +120,7 @@ def makelable(txt, mylable):
                                 line_ = line_.split(' ')
                                 sagittal, coronal, axial = line_[0], line_[1], line_[2]
                                 aposLymphPos = [sagittal, coronal, axial, lable]
-                                allLymphPos.append(aposLymphPos)
+                                allposLymphPos.append(aposLymphPos)
 
                     if "sizes.txt" in filename.lower():
                         with open(os.path.join(dirName, filename), 'r') as mfopen:
@@ -117,8 +139,17 @@ def makelable(txt, mylable):
                     # for _ in np.arange(len(allLymphPos)):
                     #     newlable.append(allLymphPos[_])
                     # print(newlable)
-                with open(mylable, 'a') as mfopen:
-                    for _ in allLymphPos:
+                with open(myneglabel, 'a') as mfopen:
+                    for _ in allnegLymphPos:
+                        mfopen.write(datapath + '@')
+                        for i in _:
+                            if _.index(i) == 2:
+                                mfopen.write(i + '@')
+                            else:
+                                mfopen.write(i + '  ')
+                        mfopen.write('\n')
+                with open(myposlabel, 'a') as mfopen:
+                    for _ in allposLymphPos:
                         mfopen.write(datapath + '@')
                         for i in _:
                             if _.index(i) == 2:
@@ -127,29 +158,14 @@ def makelable(txt, mylable):
                                 mfopen.write(i + '  ')
                         mfopen.write('\n')
 
-            # for dirName, subdirList, fileList in os.walk(datapath):
-            #     for filename in fileList:
-            #         if ".dcm" in filename.lower():
-            #             # self.lstFilesDCM.append(os.path.join(dirName, filename))
-            #             with open(mylable, 'a') as mfopen:
-            #                 mfopen.write(os.path.join(dirName, filename) + '  ')
-            #                 # x = [i[2] for i in newlable]
-            #                 is_exist = 0
-            #                 for _ in np.arange(len(newlable)):
-            #                     if filename.find(newlable[_][2]) != -1:
-            #                         is_exist = is_exist + 1
-            #                 mfopen.write(str(is_exist) + '@' + '\n')
-        print(m)
-        # print(filename)
-    # print(lstFilesDCM)
-
 
 if __name__ == "__main__":
-    dataPath = r"../lymph_dataset/CT Lymph Nodes"
+
+    dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
     lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
     candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
-    datalabletxt = '../lymph_dataset/lable.txt'
-    mylable = '../lymph_dataset/mylable.txt'
+    datalabletxt = '../lymph_dataset/label.txt'
+    mylable = '../lymph_dataset/mylabel.txt'
     trainpath = r'../lymph_dataset/trainpath.txt'
     testpath = r'../lymph_dataset/testpath.txt'
 
@@ -161,4 +177,4 @@ if __name__ == "__main__":
     allPPathList = [dataPath + "/" + patientNum for patientNum in patientDirlist]
     candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
     maketxtfile(allPPathList, candidatePathlist)
-    makelable(datalabletxt, mylable)
+    makelabel(datalabletxt, mylabel)

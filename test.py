@@ -1,41 +1,31 @@
 import cv2
 import numpy as np
-import matplotlib.pylab as plt
-import pydicom as dicom
-import os
-import glob
 
-import pandas as pd
-import scipy.ndimage
-
-from skimage import measure, morphology
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+# from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import torch
 import torch.nn as nn
-from torch import optim
+import  torch.nn.functional as f
+import sklearn.metrics as skl
 from torch.autograd import Variable
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
-import torch.nn.functional as F
-import torchvision.models as models
+BATCH_SIZE = 2
+learning_rate = 1e-5
+num_epoches = 10
+NUM_ROUTING_ITERATIONS = 3
+a = torch.tensor([[1, 0],
+                  [1, 1],
+                  [0, 1]])
+b = torch.tensor([[0, 1],
+                  [0, 0],
+                  [0, 1]])
+targets = ['Fasle', 'True']
+a = a.view(-1).numpy()
+b = b.view(-1).numpy()
+print(skl.classification_report(a, b, target_names=targets))
+print(skl.confusion_matrix(a, b))
+# print(torch.cat((a.view(-1), b.view(-1))))
+# a = a.view((1, -1))
+# b = b.view((1, -1))
+# print(torch.cat((a, b), dim=1))
 
 
-def squash(tensor, dim=-1):
-    # 张量的范数||Sj||
-    squared_norm = torch.norm(tensor, p=2, dim=dim, keepdim=True)
-    # squared_norm = (tensor ** 2).sum(dim=dim, keepdim=True)
-    # 1e-8 防止分母为0
-    scale = squared_norm ** 2 / (1 + squared_norm ** 2) / (squared_norm + 1e-8)
-    return scale * tensor
-
-x = torch.randn(2, 16)
-y = torch.randn(4, 2, 1, 1, 16)
-z = torch.randn(2, 16)
-a = torch.tensor([[0.1342, 0.1391],
-        [0.1338, 0.0974],
-        [0.0778, 0.0631],
-        [0.0635, 0.0518]]
-                 )
-b = torch.tensor(251)
-print(b)

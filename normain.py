@@ -4,9 +4,9 @@ import matplotlib.pylab as plt
 import pydicom as dicom
 import os
 import glob
-
 import pandas as pd
 import scipy.ndimage
+import sklearn.metrics as skl
 
 # from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
@@ -20,10 +20,10 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 
 import LABLE_MAEKER.makelable as ml
-import Capsule3D.modle as md
+import mymodle.norm_nn as mm
 
 BATCH_SIZE = 2
-learning_rate = 1e-5
+learning_rate = 1e-4
 num_epoches = 10
 NUM_ROUTING_ITERATIONS = 3
 
@@ -75,12 +75,12 @@ class MyDataset(Dataset):
             firstslice = slices[0]
             pixelposition = self.getpixelposition(firstslice, itpos)
             # print(pixelposition)
-            if pixelposition[2] >= 15:
-                lymphslices = slices[pixelposition[2] - 15:pixelposition[2] + 15]
-                if len(slices) - pixelposition[2] < 15:
-                    lymphslices = slices[len(slices) - 30:len(slices)]
+            if pixelposition[2] >= 32:
+                lymphslices = slices[pixelposition[2] - 32:pixelposition[2] + 32]
+                if len(slices) - pixelposition[2] < 32:
+                    lymphslices = slices[len(slices) - 64:len(slices)]
             else:
-                lymphslices = slices[0:30]
+                lymphslices = slices[0:64]
             # print(lymphslices)
             slices = self.get_pixels_hu(lymphslices, pixelposition)
             image = self.setDicomCenWid(slices, "lymph")
@@ -88,6 +88,8 @@ class MyDataset(Dataset):
             image = image[np.newaxis, :, :, :]
             # print(image.shape)
             # dataimage = self.resample(image, firstslice)
+            # plt.imshow(image[0, 32, :, :],cmap='gray')
+            # plt.show()
         else:
             slices = [dicom.read_file(s) for s in self.lstFilesDCM]
             slices.sort(key=lambda x: int(x.ImagePositionPatient[2]))
@@ -106,6 +108,7 @@ class MyDataset(Dataset):
         thickness = firstslice.SliceThickness
         imageposition = [round((float(position[0]) - x) / spacing), round((float(position[1]) - y) / spacing),
                          round((float(position[2]) - z) / thickness)]
+        # imageposition = [268, 309, 418]
 
         return imageposition
 
@@ -120,9 +123,9 @@ class MyDataset(Dataset):
         return slices
 
     def get_pixels_hu(self, slices, positioninslice):
-        image = np.stack([np.pad(s.pixel_array, ((15, 15), (15, 15)), 'linear_ramp')[
-                          positioninslice[0]:positioninslice[0] + 30,
-                          positioninslice[1]: positioninslice[1] + 30] for s in slices])
+        image = np.stack([np.pad(s.pixel_array, ((32, 32), (32, 32)), 'linear_ramp')[
+                          positioninslice[0]:positioninslice[0] + 64,
+                          positioninslice[1]:positioninslice[1] + 64] for s in slices])
         image = image.astype(np.int16)
         image[image == -2000] = 0
 
@@ -198,34 +201,24 @@ class MyDataset(Dataset):
 
 
 def train(model, train_loader, test_loader, args):
-    """
-    Training a CapsuleNet
-    :param model: the CapsuleNet model
-    :param train_loader: torch.utils.data.DataLoader for training data
-    :param test_loader: torch.utils.data.DataLoader for test data
-    :param args: arguments
-    :return: The trained model
-    """
     print('Begin Training' + '-' * 70)
     from time import time
     import csv
     logfile = open(args.save_dir + '/log.csv', 'a')
     logwriter = csv.DictWriter(logfile, fieldnames=['epoch', 'loss', 'val_loss', 'val_acc'])
     logwriter.writeheader()
-
     print("Model's state_dict:")
     # Print model's state_dict
     for param_tensor in model.state_dict():
         print(param_tensor, "\t", model.state_dict()[param_tensor].size())
     t0 = time()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    criterion = md.CapsuleLoss()
+    criterion = nn.CrossEntropyLoss()
     lr_decay = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay)
     best_val_acc = 0.
     for epoch in range(args.epochs):
         print('*' * 25, 'epoch{}'.format(epoch + 1), '*' * 25)
         model.train()  # set to training mode
-
         ti = time()
         training_loss = 0.0
         for i, data in enumerate(train_loader, start=1):
@@ -235,7 +228,7 @@ def train(model, train_loader, test_loader, args):
             else:
                 # print(image)
                 # label = label.long()
-                label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
+                # label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
                 # print(label)
                 if use_gpu:
                     image = Variable(image).cuda()
@@ -244,13 +237,15 @@ def train(model, train_loader, test_loader, args):
                     image = Variable(image)
                     label = Variable(label)
                 optimizer.zero_grad()  # set gradients of optimizer to zero
-                classes = model(image, label)  # forward
-                # print(classes, reconstructions.shape)
-                loss = criterion(image, label, classes)  # compute loss
-                print(loss.data.item())
+                classes = model(image)  # forward
+                # print(classes, label)
+                loss = criterion(classes, label.long())  # compute loss
                 loss.backward()  # backward, compute all gradients of loss w.r.t all Variables
                 training_loss += loss.data.item() * image.size(0)  # record the batch loss
                 optimizer.step()  # update the trainable parameters with computed gradients
+                # if i > 10:
+                # print("time=%ds" % (time()-ti))
+
         lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
         # compute validation loss and acc
         val_loss, val_acc = test(model, test_loader, args)
@@ -264,8 +259,8 @@ def train(model, train_loader, test_loader, args):
             torch.save(model.state_dict(), args.save_dir + '/epoch%d.pkl' % epoch)
             print("best val_acc increased to %.4f" % best_val_acc)
     logfile.close()
-    torch.save(model.state_dict(), args.save_dir + '/trained_model_3.pkl')
-    print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
+    torch.save(model.state_dict(), args.save_dir + '/trained_model_Resnet.pkl')
+    print('Trained model saved to \'%s/trained_model_Resnet.h5\'' % args.save_dir)
     print("Total time = %ds" % (time() - t0))
     print('End Training' + '-' * 70)
     return model
@@ -275,31 +270,42 @@ def test(model, test_loader, args):
     model.eval()
     test_loss = 0
     correct = 0
-    criterion = md.CapsuleLoss()
+    criterion = nn.CrossEntropyLoss()
     for i, data in enumerate(test_loader, start=1):
         image, label, pos = data[0], data[1], data[2]
-        # label = label.long()
-        label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
         if use_gpu:
             image = Variable(image).cuda()
             label = Variable(label).cuda()
         else:
             image = Variable(image)
             label = Variable(label)
-
         y_pred = model(image)
-        test_loss += criterion(image, label, y_pred).data.item() * image.size(0)  # sum up batch loss
+        test_loss += criterion(y_pred, label.long()).data.item() * image.size(0)  # sum up batch loss
+        # print(y_pred.data, label.data)
         y_pred = y_pred.data.max(1)[1]
-        y_true = label.data.max(1)[1]
+        y_true = label.data
         print(y_pred, y_true)
         correct += y_pred.eq(y_true).cpu().sum()
+        correct = correct.item()
+        # 所有预测和标签
+        if i == 1:
+            all_ypred = y_pred.view(-1)
+            all_ytrue = y_true.view(-1)
+        else:
+            all_ypred = torch.cat((all_ypred, y_pred.view(-1)))
+            all_ytrue = torch.cat((all_ytrue, y_true.view(-1)))
+    all_ypred = all_ypred.cpu().numpy()
+    all_ytrue = all_ytrue.cpu().numpy()
+    targets = ['Fasle', 'True']
+    print(skl.classification_report(all_ytrue, all_ypred, target_names=targets))
+    print(skl.confusion_matrix(all_ytrue, all_ypred))
 
     test_loss /= len(test_loader.dataset)
     print(correct, len(test_loader.dataset))
     return test_loss, correct / len(test_loader.dataset)
 
 
-def load_dataset(path='F:\lymph_dataset\mylable.txt', download=False, batch_size=2, shift_pixels=2):
+def load_dataset(download=False, batch_size=4, shift_pixels=2):
     """
     Construct dataloaders for training and test data. Data augmentation is also done here.
     :param path: file path of the dataset
@@ -308,53 +314,31 @@ def load_dataset(path='F:\lymph_dataset\mylable.txt', download=False, batch_size
     :param shift_pixels: maximum number of pixels to shift in each direction
     :return: train_loader, test_loader
     """
-    trainpath = r'F:\lymph_dataset\/trainpath.txt'
-    testpath = r'F:\lymph_dataset\testpath.txt'
-    if os.path.exists(trainpath):
-        os.remove(trainpath)
-    if os.path.exists(testpath):
-        os.remove(testpath)
-    ml.make_traintest_lable(path, trainpath, testpath)
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
+
     traindata = MyDataset(trainpath, augment=True)
     testdata = MyDataset(testpath, augment=True)
-    train_loader = DataLoader(traindata, batch_size=args.batch_size, num_workers=0)
-    test_loader = DataLoader(testdata, batch_size=args.batch_size, num_workers=0)
+    train_loader = DataLoader(traindata, batch_size=batch_size, shuffle=True, num_workers=0)
+    test_loader = DataLoader(testdata, batch_size=batch_size, shuffle=True, num_workers=0)
 
     return train_loader, test_loader
-
-
-# def show_reconstruction(model, test_loader, n_images, args):
-#     import matplotlib.pyplot as plt
-#     from utils import combine_images
-#     from PIL import Image
-#     import numpy as np
-#
-#     model.eval()
-#     for x, _ in test_loader:
-#         x = Variable(x[:min(n_images, x.size(0))].cuda(), volatile=True)
-#         _, x_recon = model(x)
-#         data = np.concatenate([x.data, x_recon.data])
-#         img = combine_images(np.transpose(data, [0, 2, 3, 1]))
-#         image = img * 255
-#         Image.fromarray(image.astype(np.uint8)).save(args.save_dir + "/real_and_recon.png")
-#         print()
-#         print('Reconstructed images are saved to %s/real_and_recon.png' % args.save_dir)
-#         print('-' * 70)
-#         plt.imshow(plt.imread(args.save_dir + "/real_and_recon.png", ))
-#         plt.show()
-#         break
 
 
 if __name__ == "__main__":
     import argparse
 
     print('start')
-    dataPath = r"F:\lymph_dataset\CT_Lymph_Nodes"
-    lablePath = r"F:\lymph_dataset\MED_ABD_LYMPH_ANNOTATIONS"
-    candidatePath = r"F:\lymph_dataset\MED_ABD_LYMPH_CANDIDATES"
-    datalabletxt = r'F:\lymph_dataset\lable.txt'
-    mylable = r'F:\lymph_dataset\mylable.txt'
-    print(mylable)
+    dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
+    lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
+    candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
+    labeltxt = r'../lymph_dataset/label.txt'
+    myABDneglabel = '../lymph_dataset/myABDneglabel.txt'
+    myABDposlabel = '../lymph_dataset/myABDposlabel.txt'
+    myMEDneglabel = '../lymph_dataset/myMEDneglabel.txt'
+    myMEDposlabel = '../lymph_dataset/myMEDposlabel.txt'
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
 
     patientDirlist = os.listdir(dataPath)
     lableDirlist = os.listdir(lablePath)
@@ -365,14 +349,16 @@ if __name__ == "__main__":
     candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
     ml.maketxtfile(allPPathList, candidatePathlist)
     print("successfully maketxt")
-    ml.makelable(datalabletxt, mylable)
-    print("successfully mylable")
+    ml.makelabel(labeltxt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel)
+    print("successfully mylabel")
+    ml.make_traintest_label(myABDneglabel, myABDposlabel, trainpath, testpath)
+    print("successfully traintesttxt")
 
     # setting the hyper parameters
     parser = argparse.ArgumentParser(description="3D capsule networck on lymph dataset")
-    parser.add_argument('--epochs', default=50, type=int)
-    parser.add_argument('--batch_size', default=4, type=int)
-    parser.add_argument('--lr', default=1e-5, type=float,
+    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--lr', default=1e-4, type=float,
                         help="Initial learning rate")
     parser.add_argument('--lr_decay', default=0.9, type=float,
                         help="The value multiplied by lr at each epoch. Set a larger value for larger epochs")
@@ -382,8 +368,6 @@ if __name__ == "__main__":
                         help="Number of iterations used in routing algorithm. should > 0")  # num_routing should > 0
     parser.add_argument('--shift_pixels', default=2, type=int,
                         help="Number of pixels to shift at most in each direction.")
-    parser.add_argument('--data_dir', default=mylable,
-                        help="Directory of data. If no data, use \'--download\' flag to download it")
     parser.add_argument('--download', action='store_true',
                         help="Download the required data.")
     parser.add_argument('--save_dir', default='./result')
@@ -397,13 +381,14 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # load data
-    train_loader, test_loader = load_dataset(args.data_dir, download=False, batch_size=args.batch_size)
+    train_loader, test_loader = load_dataset(download=False, batch_size=args.batch_size)
 
-    model = md.CapsuleNet_3D()
+    model = mm.ResNet(mm.ResidualBlock, [2, 2, 2, 2])  # resnet-18
     use_gpu = torch.cuda.is_available()
 
     if use_gpu:
         model = model.cuda()
+        # model = nn.DataParallel(model).cuda()
 
     if args.weights is not None:  # init the model weights with provided one
         model.load_state_dict(torch.load(args.weights))

@@ -218,7 +218,7 @@ def train(model, train_loader, test_loader, args):
     for param_tensor in model.state_dict():
         print(param_tensor, "\t", model.state_dict()[param_tensor].size())
     t0 = time()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = md.CapsuleLoss()
     lr_decay = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay)
     best_val_acc = 0.
@@ -293,13 +293,14 @@ def test(model, test_loader, args):
         y_true = label.data.max(1)[1]
         print(y_pred, y_true)
         correct += y_pred.eq(y_true).cpu().sum()
+        correct = correct.item()
 
     test_loss /= len(test_loader.dataset)
     print(correct, len(test_loader.dataset))
     return test_loss, correct / len(test_loader.dataset)
 
 
-def load_dataset(path='F:\lymph_dataset\mylable.txt', download=False, batch_size=2, shift_pixels=2):
+def load_dataset(download=False, batch_size=4, shift_pixels=2):
     """
     Construct dataloaders for training and test data. Data augmentation is also done here.
     :param path: file path of the dataset
@@ -308,17 +309,13 @@ def load_dataset(path='F:\lymph_dataset\mylable.txt', download=False, batch_size
     :param shift_pixels: maximum number of pixels to shift in each direction
     :return: train_loader, test_loader
     """
-    trainpath = r'F:\lymph_dataset\/trainpath.txt'
-    testpath = r'F:\lymph_dataset\testpath.txt'
-    if os.path.exists(trainpath):
-        os.remove(trainpath)
-    if os.path.exists(testpath):
-        os.remove(testpath)
-    ml.make_traintest_lable(path, trainpath, testpath)
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
+
     traindata = MyDataset(trainpath, augment=True)
     testdata = MyDataset(testpath, augment=True)
-    train_loader = DataLoader(traindata, batch_size=args.batch_size, num_workers=0)
-    test_loader = DataLoader(testdata, batch_size=args.batch_size, num_workers=0)
+    train_loader = DataLoader(traindata, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_loader = DataLoader(testdata, batch_size=batch_size, shuffle=True, num_workers=4)
 
     return train_loader, test_loader
 
@@ -349,12 +346,16 @@ if __name__ == "__main__":
     import argparse
 
     print('start')
-    dataPath = r"F:\lymph_dataset\CT_Lymph_Nodes"
-    lablePath = r"F:\lymph_dataset\MED_ABD_LYMPH_ANNOTATIONS"
-    candidatePath = r"F:\lymph_dataset\MED_ABD_LYMPH_CANDIDATES"
-    datalabletxt = r'F:\lymph_dataset\lable.txt'
-    mylable = r'F:\lymph_dataset\mylable.txt'
-    print(mylable)
+    dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
+    lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
+    candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
+    labeltxt = r'../lymph_dataset/label.txt'
+    myABDneglabel = '../lymph_dataset/myABDneglabel.txt'
+    myABDposlabel = '../lymph_dataset/myABDposlabel.txt'
+    myMEDneglabel = '../lymph_dataset/myMEDneglabel.txt'
+    myMEDposlabel = '../lymph_dataset/myMEDposlabel.txt'
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
 
     patientDirlist = os.listdir(dataPath)
     lableDirlist = os.listdir(lablePath)
@@ -365,14 +366,16 @@ if __name__ == "__main__":
     candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
     ml.maketxtfile(allPPathList, candidatePathlist)
     print("successfully maketxt")
-    ml.makelable(datalabletxt, mylable)
+    ml.makelabel(labeltxt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel)
     print("successfully mylable")
+    ml.make_traintest_label(myABDneglabel, myABDposlabel, trainpath, testpath)
+    print("successfully traintesttxt")
 
     # setting the hyper parameters
     parser = argparse.ArgumentParser(description="3D capsule networck on lymph dataset")
-    parser.add_argument('--epochs', default=50, type=int)
-    parser.add_argument('--batch_size', default=4, type=int)
-    parser.add_argument('--lr', default=1e-5, type=float,
+    parser.add_argument('--epochs', default=20, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--lr', default=0.001, type=float,
                         help="Initial learning rate")
     parser.add_argument('--lr_decay', default=0.9, type=float,
                         help="The value multiplied by lr at each epoch. Set a larger value for larger epochs")
@@ -382,8 +385,6 @@ if __name__ == "__main__":
                         help="Number of iterations used in routing algorithm. should > 0")  # num_routing should > 0
     parser.add_argument('--shift_pixels', default=2, type=int,
                         help="Number of pixels to shift at most in each direction.")
-    parser.add_argument('--data_dir', default=mylable,
-                        help="Directory of data. If no data, use \'--download\' flag to download it")
     parser.add_argument('--download', action='store_true',
                         help="Download the required data.")
     parser.add_argument('--save_dir', default='./result')
@@ -397,7 +398,7 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # load data
-    train_loader, test_loader = load_dataset(args.data_dir, download=False, batch_size=args.batch_size)
+    train_loader, test_loader = load_dataset(download=False, batch_size=args.batch_size)
 
     model = md.CapsuleNet_3D()
     use_gpu = torch.cuda.is_available()
@@ -415,3 +416,5 @@ if __name__ == "__main__":
             print('No weights are provided. Will test using random initialized weights.')
         test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
         print('test acc = %.4f, test loss = %.5f' % (test_acc, test_loss))
+
+        # show_reconstruction(model, test_loader, 50, args)

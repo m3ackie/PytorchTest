@@ -291,9 +291,9 @@ class C3D_ResNet_inception(nn.Module):
     def __init__(self, num_classes):
         super(C3D_ResNet_inception, self).__init__()
 
-        self.layer_1_1 = nn.Conv3d(1, 16, 1, padding=0, bias=False)
-        self.layer_1_3 = Conv3d_simple(1, 16, 3, True)
-        self.layer_1_7 = Conv3d_simple(1, 16, 7, True)
+        self.layer_1_1 = nn.Conv3d(1, 32, 1, padding=0, bias=False)
+        self.layer_1_3 = Conv3d_simple(1, 32, 3, True)
+        self.layer_1_7 = Conv3d_simple(1, 32, 7, True)
 
         self.layer_2_1 = nn.Conv3d(97, 128, 1, padding=0, bias=False)
         self.layer_2_3 = Conv3d_simple(97, 128, 3, True)
@@ -326,23 +326,23 @@ class C3D_ResNet_inception(nn.Module):
         l1_3 = self.layer_1_3(input)
         l1_7 = self.layer_1_7(input)
         l1_out = torch.cat((l1_1, l1_3, l1_7, input), 1)
-        # 97 x 32 x 128 x 128
-        l1_out = self.pool_simple(l1_out)
-        # 97 x 32 x 64 x 64
+        # 97 x 64 x 64 x 64
+        l1_out = self.pool_full(l1_out)
+        # 97 x 32 x 32 x 32
         l2_1 = self.layer_2_1(l1_out)
         l2_3 = self.layer_2_3(l1_out)
         l2_7 = self.layer_2_7(l1_out)
         l2_out = torch.cat((l2_1, l2_3, l2_7, l1_out), 1)
-        # 481 x 32 x 64 x 64
-        l2_out = self.pool_simple(l2_out)
         # 481 x 32 x 32 x 32
+        l2_out = self.pool_full(l2_out)
+        # 481 x 16 x 16 x 16
         l3_1 = self.layer_3_1(l2_out)
         l3_3 = self.layer_3_3(l2_out)
         l3_7 = self.layer_3_7(l2_out)
         l3_out = torch.cat((l3_1, l3_3, l3_7, l2_out), 1)
         # 865 x 32 x 32 x 32
-        l3_out = self.pool_full(l3_out)
-        # 865 x 16 x 16 x 16
+        # l3_out = self.pool_full(l3_out)
+        # 865 x 32 x 32 x 32
         l4_1 = self.layer_4_1(l3_out)
         l4_3 = self.layer_4_3(l3_out)
         l4_out = torch.cat((l4_1, l4_3, l3_out), 1)

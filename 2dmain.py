@@ -129,8 +129,8 @@ class MyDataset(Dataset):
 
     def get_pixels_hu(self, slices, positioninslice):
         image = np.stack([np.pad(s.pixel_array, ((32, 32), (32, 32)), 'linear_ramp')[
-                          positioninslice[0] :positioninslice[0] + 64,
-                          positioninslice[1] :positioninslice[1] + 64] for s in slices])
+                          positioninslice[0]:positioninslice[0] + 64,
+                          positioninslice[1]:positioninslice[1] + 64] for s in slices])
         image = image.astype(np.int16)
         image[image == -2000] = 0
 
@@ -206,7 +206,6 @@ class MyDataset(Dataset):
 
 
 def train(model, train_loader, test_loader, args):
-
     print('Begin Training' + '-' * 70)
     from time import time
     import csv
@@ -250,7 +249,7 @@ def train(model, train_loader, test_loader, args):
                 training_loss += loss.data.item() * image.size(0)  # record the batch loss
                 optimizer.step()  # update the trainable parameters with computed gradients
                 if i > 100:
-                    print("time=%ds" % (time()-ti))
+                    print("time=%ds" % (time() - ti))
         lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
         # compute validation loss and acc
         val_loss, val_acc = test(model, test_loader, args)
@@ -261,10 +260,10 @@ def train(model, train_loader, test_loader, args):
                  val_loss, val_acc, time() - ti))
         if val_acc > best_val_acc:  # update best validation acc and save model
             best_val_acc = val_acc
-            torch.save(model.state_dict(), args.save_dir + '/epoch%d.pkl' % epoch)
+            torch.save(model.state_dict(), args.save_dir + '/2DGooglenetepoch%d.pkl' % epoch)
             print("best val_acc increased to %.4f" % best_val_acc)
     logfile.close()
-    torch.save(model.state_dict(), args.save_dir + '/trained_model_Resnet.pkl')
+    torch.save(model.state_dict(), args.save_dir + '/trained_model_2DGooglenetResnet.pkl')
     print('Trained model saved to \'%s/trained_model.h5\'' % args.save_dir)
     print("Total time = %ds" % (time() - t0))
     print('End Training' + '-' * 70)
@@ -319,8 +318,8 @@ def load_dataset(download=False, batch_size=2, shift_pixels=2):
     :param shift_pixels: maximum number of pixels to shift in each direction
     :return: train_loader, test_loader
     """
-    trainpath = r'F:\lymph_dataset\trainpath.txt'
-    testpath = r'F:\lymph_dataset\testpath.txt'
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
 
     traindata = MyDataset(trainpath, augment=True)
     testdata = MyDataset(testpath, augment=True)
@@ -334,26 +333,17 @@ if __name__ == "__main__":
     import argparse
 
     print('start')
-    # dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
-    # lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
-    # candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
-    # labeltxt = r'../lymph_dataset/label.txt'
-    # myABDneglabel = '../lymph_dataset/myABDneglabel.txt'
-    # myABDposlabel = '../lymph_dataset/myABDposlabel.txt'
-    # myMEDneglabel = '../lymph_dataset/myMEDneglabel.txt'
-    # myMEDposlabel = '../lymph_dataset/myMEDposlabel.txt'
-    # trainpath = r'../lymph_dataset/trainpath.txt'
-    # testpath = r'../lymph_dataset/testpath.txt'
-    dataPath = r"F:\lymph_dataset\CT_Lymph_Nodes"
-    lablePath = r"F:\lymph_dataset\MED_ABD_LYMPH_ANNOTATIONS"
-    candidatePath = r"F:\lymph_dataset\MED_ABD_LYMPH_CANDIDATES"
-    labeltxt = r'F:\lymph_dataset\label.txt'
-    myABDneglabel = 'F:\lymph_dataset\myABDneglabel.txt'
-    myABDposlabel = 'F:\lymph_dataset\myABDposlabel.txt'
-    myMEDneglabel = 'F:\lymph_dataset\myMEDneglabel.txt'
-    myMEDposlabel = 'F:\lymph_dataset\myMEDposlabel.txt'
-    trainpath = r'F:\lymph_dataset\trainpath.txt'
-    testpath = r'F:\lymph_dataset\testpath.txt'
+    dataPath = r"../lymph_dataset/CT_Lymph_Nodes"
+    lablePath = r"../lymph_dataset/MED_ABD_LYMPH_ANNOTATIONS"
+    candidatePath = r"../lymph_dataset/MED_ABD_LYMPH_CANDIDATES"
+    labeltxt = r'../lymph_dataset/label.txt'
+    myABDneglabel = '../lymph_dataset/myABDneglabel.txt'
+    myABDposlabel = '../lymph_dataset/myABDposlabel.txt'
+    myMEDneglabel = '../lymph_dataset/myMEDneglabel.txt'
+    myMEDposlabel = '../lymph_dataset/myMEDposlabel.txt'
+    trainpath = r'../lymph_dataset/trainpath.txt'
+    testpath = r'../lymph_dataset/testpath.txt'
+
     patientDirlist = os.listdir(dataPath)
     lableDirlist = os.listdir(lablePath)
     candidateDirlist = os.listdir(candidatePath)
@@ -361,17 +351,17 @@ if __name__ == "__main__":
     # 获取指定病人DICOM数据集
     allPPathList = [dataPath + "/" + patientNum for patientNum in patientDirlist]
     candidatePathlist = [candidatePath + "/" + lableNum for lableNum in candidateDirlist]
-    ml.maketxtfile(allPPathList, candidatePathlist)
+    # ml.maketxtfile(allPPathList, candidatePathlist)
     print("successfully maketxt")
-    ml.makelabel(labeltxt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel)
+    # ml.makelabel(labeltxt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel)
     print("successfully mylabel")
-    ml.make_traintest_label(myABDneglabel, myABDposlabel, trainpath, testpath)
+    # ml.make_traintest_label(myABDneglabel, myABDposlabel, trainpath, testpath)
     print("successfully traintesttxt")
 
     # setting the hyper parameters
     parser = argparse.ArgumentParser(description="2DCNN networck on lymph dataset")
-    parser.add_argument('--epochs', default=10, type=int)
-    parser.add_argument('--batch_size', default=4, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--lr', default=1e-4, type=float,
                         help="Initial learning rate")
     parser.add_argument('--lr_decay', default=0.9, type=float,
@@ -397,7 +387,8 @@ if __name__ == "__main__":
     # load data
     train_loader, test_loader = load_dataset(download=False, batch_size=args.batch_size)
 
-    model = mm.My2DCNN(3)  # resnet-18
+    # model = mm.My2DCNN(3)  # resnet-18
+    model = mm.MyGoogleNet(2)
     use_gpu = torch.cuda.is_available()
     print(use_gpu)
     if use_gpu:
@@ -414,6 +405,4 @@ if __name__ == "__main__":
             print('No weights are provided. Will test using random initialized weights.')
         test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
         print('test acc = %.4f, test loss = %.5f' % (test_acc, test_loss))
-
-
 

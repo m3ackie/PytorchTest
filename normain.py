@@ -4,9 +4,9 @@ import matplotlib.pylab as plt
 import pydicom as dicom
 import os
 import glob
+import sklearn.metrics as skl
 import pandas as pd
 import scipy.ndimage
-import sklearn.metrics as skl
 
 # from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 
 import LABLE_MAEKER.makelable as ml
-import mymodle.norm_nn as mm
+import mymodle.Densenet3d as mm
 
 BATCH_SIZE = 2
 learning_rate = 1e-4
@@ -231,10 +231,11 @@ def train(model, train_loader, test_loader, args):
                 # label = torch.zeros(label.size(0), 2).scatter_(1, label.view(-1, 1), 1.)  # change to one-hot coding
                 # print(label)
                 if use_gpu:
+                    image = F.interpolate(Variable(image), size=[112, 112, 112], mode='trilinear')
                     image = Variable(image).cuda()
                     label = Variable(label).cuda()
                 else:
-                    image = Variable(image)
+                    image = F.interpolate(Variable(image), size=[112, 112, 112], mode='trilinear')
                     label = Variable(label)
                 optimizer.zero_grad()  # set gradients of optimizer to zero
                 classes = model(image)  # forward
@@ -256,10 +257,10 @@ def train(model, train_loader, test_loader, args):
                  val_loss, val_acc, time() - ti))
         if val_acc > best_val_acc:  # update best validation acc and save model
             best_val_acc = val_acc
-            torch.save(model.state_dict(), args.save_dir + '/epoch%d.pkl' % epoch)
+            torch.save(model.state_dict(), args.save_dir + '/Densenet_ABDepoch%d.pkl' % epoch)
             print("best val_acc increased to %.4f" % best_val_acc)
     logfile.close()
-    torch.save(model.state_dict(), args.save_dir + '/trained_model_Resnet.pkl')
+    torch.save(model.state_dict(), args.save_dir + '/trained_model_Densenet_ABD.pkl')
     print('Trained model saved to \'%s/trained_model_Resnet.h5\'' % args.save_dir)
     print("Total time = %ds" % (time() - t0))
     print('End Training' + '-' * 70)
@@ -271,41 +272,47 @@ def test(model, test_loader, args):
     test_loss = 0
     correct = 0
     criterion = nn.CrossEntropyLoss()
-    for i, data in enumerate(test_loader, start=1):
-        image, label, pos = data[0], data[1], data[2]
-        if use_gpu:
-            image = Variable(image).cuda()
-            label = Variable(label).cuda()
-        else:
-            image = Variable(image)
-            label = Variable(label)
-        y_pred = model(image)
-        test_loss += criterion(y_pred, label.long()).data.item() * image.size(0)  # sum up batch loss
-        # print(y_pred.data, label.data)
-        y_pred = y_pred.data.max(1)[1]
-        y_true = label.data
-        print(y_pred, y_true)
-        correct += y_pred.eq(y_true).cpu().sum()
-        correct = correct.item()
-        # 所有预测和标签
-        if i == 1:
-            all_ypred = y_pred.view(-1)
-            all_ytrue = y_true.view(-1)
-        else:
-            all_ypred = torch.cat((all_ypred, y_pred.view(-1)))
-            all_ytrue = torch.cat((all_ytrue, y_true.view(-1)))
-    all_ypred = all_ypred.cpu().numpy()
-    all_ytrue = all_ytrue.cpu().numpy()
-    targets = ['Fasle', 'True']
-    print(skl.classification_report(all_ytrue, all_ypred, target_names=targets))
-    print(skl.confusion_matrix(all_ytrue, all_ypred))
+    with torch.no_grad():
+        for i, data in enumerate(test_loader, start=1):
+            image, label, pos = data[0], data[1], data[2]
+            if use_gpu:
+                image = F.interpolate(Variable(image), size=[112, 112, 112], mode='trilinear')
+                image = Variable(image).cuda()
+                label = Variable(label).cuda()
+            else:
+                image = F.interpolate(Variable(image), size=[112, 112, 112], mode='trilinear')
+                label = Variable(label)
+            y_pred = model(image)
+            score = F.softmax(y_pred, dim=1)
+            test_loss += criterion(y_pred, label.long()).data.item() * image.size(0)  # sum up batch loss
+            # print(y_pred.data, label.data)
+            y_pred = y_pred.data.max(1)[1]
+            y_true = label.data
+            # print(y_pred, y_true)
+            correct += y_pred.eq(y_true).cpu().sum()
+            correct = correct.item()
+            # 所有预测和标签
+            if i == 1:
+                all_ypred = y_pred.view(-1)
+                all_ytrue = y_true.view(-1)
+                all_score = score.view(-1)
+            else:
+                all_ypred = torch.cat((all_ypred, y_pred.view(-1)))
+                all_ytrue = torch.cat((all_ytrue, y_true.view(-1)))
+                all_score = torch.cat((all_score, score.view(-1)))
+        all_ypred = all_ypred.cpu().numpy()
+        all_ytrue = all_ytrue.cpu().numpy()
+        targets = ['Fasle', 'True']
+        print(all_score.shape, all_score)
+        print(skl.classification_report(all_ytrue, all_ypred, target_names=targets))
+        print(skl.confusion_matrix(all_ytrue, all_ypred))
 
-    test_loss /= len(test_loader.dataset)
-    print(correct, len(test_loader.dataset))
+        test_loss /= len(test_loader.dataset)
+        print(correct, len(test_loader.dataset))
     return test_loss, correct / len(test_loader.dataset)
 
 
-def load_dataset(download=False, batch_size=4, shift_pixels=2):
+def load_dataset(download=False, batch_size=6, shift_pixels=2):
     """
     Construct dataloaders for training and test data. Data augmentation is also done here.
     :param path: file path of the dataset
@@ -319,8 +326,8 @@ def load_dataset(download=False, batch_size=4, shift_pixels=2):
 
     traindata = MyDataset(trainpath, augment=True)
     testdata = MyDataset(testpath, augment=True)
-    train_loader = DataLoader(traindata, batch_size=batch_size, shuffle=True, num_workers=0)
-    test_loader = DataLoader(testdata, batch_size=batch_size, shuffle=True, num_workers=0)
+    train_loader = DataLoader(traindata, batch_size=batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(testdata, batch_size=batch_size, shuffle=True, num_workers=2)
 
     return train_loader, test_loader
 
@@ -351,13 +358,13 @@ if __name__ == "__main__":
     print("successfully maketxt")
     ml.makelabel(labeltxt, myABDneglabel, myABDposlabel, myMEDneglabel, myMEDposlabel)
     print("successfully mylabel")
-    ml.make_traintest_label(myABDneglabel, myABDposlabel, trainpath, testpath)
+    ml.make_traintest_label(myMEDneglabel, myMEDposlabel, trainpath, testpath)
     print("successfully traintesttxt")
 
     # setting the hyper parameters
     parser = argparse.ArgumentParser(description="3D capsule networck on lymph dataset")
-    parser.add_argument('--epochs', default=10, type=int)
-    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--batch_size', default=16, type=int)
     parser.add_argument('--lr', default=1e-4, type=float,
                         help="Initial learning rate")
     parser.add_argument('--lr_decay', default=0.9, type=float,
@@ -383,12 +390,15 @@ if __name__ == "__main__":
     # load data
     train_loader, test_loader = load_dataset(download=False, batch_size=args.batch_size)
 
-    model = mm.ResNet(mm.ResidualBlock, [2, 2, 2, 2])  # resnet-18
+    # model = mm.ResNet(mm.ResidualBlock, [2, 2, 2, 2])   # resnet-18
+    # model = mm.C3D_ResNet_inception(2) # inception
+    model = mm.densenet(1, 2)
     use_gpu = torch.cuda.is_available()
 
     if use_gpu:
+        # model = model.cuda()
+        model = torch.nn.DataParallel(model, device_ids=[0, 1])
         model = model.cuda()
-        # model = nn.DataParallel(model).cuda()
 
     if args.weights is not None:  # init the model weights with provided one
         model.load_state_dict(torch.load(args.weights))
